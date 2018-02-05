@@ -1,0 +1,43 @@
+#!/bin/bash
+
+# This script train linear models on CIFAR-10 data, with or without SUQUAN normalization, for different regularization parameteres, and prints the test performance to a file.
+
+# Parameters
+SRCPATH=../../src/ # Where source files are
+RESULTFILE=results.txt # Where results are printed
+USELINEARMODEL=True
+BATCHSIZE=1000
+MAXSTEP=5000
+SAVECHECKPOINTSECS=60
+NUMEPOCHSPERDECAY=10
+USEGREYSCALE="True False"
+USEDISTORTEDINPUT=False
+USESUQUAN="True False"
+OPTIMIZEF="True False"
+WWD="0.0 0.0001 0.001 0.01 0.1 1.0"
+FWD="0.0 0.0001 0.001 0.01 0.1 1.0"
+
+# Use color or greyscale images
+for g in ${USEGREYSCALE}; do
+    # Vary regularization parameter of the linear model
+    for w in ${WWD}; do
+        # First to not use SUQUAN at all
+        USESUQUAN=False
+        echo -n python ${SRCPATH}cifar10_train.py --use_linear_model ${USELINEARMODEL} --batch_size ${BATCHSIZE} --max_steps ${MAXSTEP} --num_epochs_per_decay ${NUMEPOCHSPERDECAY} --save_checkpoint_secs ${SAVECHECKPOINTSECS} --use_greyscale ${g} --use_distorted_inputs ${USEDISTORTEDINPUT} --Wwd ${w} --use_suquan ${USESUQUAN} >> ${RESULTFILE}
+        python ${SRCPATH}cifar10_train.py --use_linear_model ${USELINEARMODEL} --batch_size ${BATCHSIZE} --max_steps ${MAXSTEP} --num_epochs_per_decay ${NUMEPOCHSPERDECAY} --save_checkpoint_secs ${SAVECHECKPOINTSECS} --use_greyscale ${g} --use_distorted_inputs ${USEDISTORTEDINPUT} --Wwd ${w} --use_suquan ${USESUQUAN}
+        python ${SRCPATH}cifar10_eval.py --use_linear_model ${USELINEARMODEL} --use_greyscale ${g} --use_suquan ${USESUQUAN} --run_once True >> ${RESULTFILE}
+        # Then perform quantile normalization without optimizing the quantile function
+        USESUQUAN=True
+        OPTIMIZEF=False
+        echo -n ${SRCPATH}python cifar10_train.py --use_linear_model ${USELINEARMODEL} --batch_size ${BATCHSIZE} --max_steps ${MAXSTEP} --num_epochs_per_decay ${NUMEPOCHSPERDECAY} --save_checkpoint_secs ${SAVECHECKPOINTSECS} --use_greyscale ${g} --use_distorted_inputs ${USEDISTORTEDINPUT} --Wwd ${w} --use_suquan ${USESUQUAN} --optimize_f ${OPTIMIZEF} >> ${RESULTFILE}
+        python ${SRCPATH}cifar10_train.py --use_linear_model ${USELINEARMODEL} --batch_size ${BATCHSIZE} --max_steps ${MAXSTEP} --num_epochs_per_decay ${NUMEPOCHSPERDECAY} --save_checkpoint_secs ${SAVECHECKPOINTSECS} --use_greyscale ${g} --use_distorted_inputs ${USEDISTORTEDINPUT} --Wwd ${w} --use_suquan ${USESUQUAN} --optimize_f ${OPTIMIZEF}
+        python ${SRCPATH}cifar10_eval.py --use_linear_model ${USELINEARMODEL} --use_greyscale ${g} --use_suquan ${USESUQUAN} --optimize_f ${OPTIMIZEF} --run_once True >> ${RESULTFILE}
+        # Then optimize the quantile function, with different regularization parameters
+        OPTIMIZEF=True
+        for v in ${FWD}; do
+            echo -n python ${SRCPATH}cifar10_train.py --use_linear_model ${USELINEARMODEL} --batch_size ${BATCHSIZE} --max_steps ${MAXSTEP} --num_epochs_per_decay ${NUMEPOCHSPERDECAY} --save_checkpoint_secs ${SAVECHECKPOINTSECS} --use_greyscale ${g} --use_distorted_inputs ${USEDISTORTEDINPUT} --Wwd ${w} --use_suquan ${USESUQUAN} --optimize_f ${OPTIMIZEF} --Fwd ${v} >> ${RESULTFILE}
+            python ${SRCPATH}cifar10_train.py --use_linear_model ${USELINEARMODEL} --batch_size ${BATCHSIZE} --max_steps ${MAXSTEP} --num_epochs_per_decay ${NUMEPOCHSPERDECAY} --save_checkpoint_secs ${SAVECHECKPOINTSECS} --use_greyscale ${g} --use_distorted_inputs ${USEDISTORTEDINPUT} --Wwd ${w} --use_suquan ${USESUQUAN} --optimize_f ${OPTIMIZEF} --Fwd ${v}
+            python ${SRCPATH}cifar10_eval.py --use_linear_model ${USELINEARMODEL} --use_greyscale ${g} --use_suquan ${USESUQUAN} --optimize_f ${OPTIMIZEF} --run_once True >> ${RESULTFILE}
+        done
+    done
+done
