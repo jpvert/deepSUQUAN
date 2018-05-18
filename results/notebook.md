@@ -1,3 +1,22 @@
+# 18/05/18: Second try for linear models (Marine)
+
+The code contained a bug in the `def inference(images)` function in  [`cifar10.py`](../src/cifar10.py). The tensorflow function `tf.nn.top_k` does a *argsort*, i.e, orders the indices of the elements of a vector so that they are sorted (in increasing or deacreasing order). What we want instead is the rank of each element of the vector. We corrected the bug by chaining two `tf.nn.top_k` which produces what we want, although it is probably not the most efficient way to do it.
+
+The previous version of the code was equivalent to exchanging the roles of `f` and `w`. As a result, `w` was initialised to an increasing target quantile instead of `f`. That explains the poor results obtained previously with QN. The new results can be summarized as follows, picking the best parameters for each configuration:  
+
+|| greyscale | RGB|
+|:---:|:---:|:---:|
+|Original data|0.306|0.367|
+|QN (uniform)|0.247|0.367|
+|SUQUAN (uniform initialisation)|0.248|0.372|
+
+We observe that on CIFAR10, quantile normalization to uniform distribution decreases the accuracy by 6% for greyscale images but does not affect the performance for rgb images. In addition, SUQUAN is able to slightly improve the performance of QN on RGB (+0.5%), but not on greyscale. Similar results were obtaiend by using the *normal* target quantile instead of the *uniform* one. 
+
+To see wether or not the quantile function `f` actually changes during training, we ran additional experiments where the initial target quantile is set to a constant vector, and monitored `f` with tensorboard during training, as well as the test accuracy. The script [`runexamples`](180518/runexamples) contains the parameters used for these additional experiments. In both experiments, we observed that the test accuracy starts at 10% (the accuracy of a random classifier) and then slowly increases to reach 0.362 (RGB) and 0.234 (greyscale). The learned target quantile are increasing vectors. They are quite smooth in a first part of the training and then become more and more noisy.
+
+These experiments show that SUQUAN does learn something, but it seems that it can't do better than the original data in these cases.
+
+
 # 18/02/03: First try (jp)
 We started from the very nice [Tensorflow tutorial on CIFAR-10 image classification with a convolutional neural network](https://www.tensorflow.org/tutorials/deep_cnn) a modified the code to implement various versions of SUQUAN:
 
