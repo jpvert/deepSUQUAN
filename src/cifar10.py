@@ -45,50 +45,11 @@ import tensorflow as tf
 
 import cifar10_input
 
-FLAGS = tf.app.flags.FLAGS
-
-# Basic model parameters.
-tf.app.flags.DEFINE_integer('batch_size', 128,
-                            """Number of images to process in a batch.""")
-tf.app.flags.DEFINE_string('data_dir', '/tmp/cifar10_data',
-                           """Path to the CIFAR-10 data directory.""")
-tf.app.flags.DEFINE_boolean('use_fp16', False,
-                            """Train the model using fp16.""")
-tf.app.flags.DEFINE_boolean('use_linear_model', False,
-                            """Whether to use a simple linear model.""")
-tf.app.flags.DEFINE_boolean('use_greyscale', False,
-                            """Whether to transform the images to greyscale (only for linear model).""")
-tf.app.flags.DEFINE_float('Wwd', 0.1,
-                          """Weight decay of the linear model.""")
-tf.app.flags.DEFINE_boolean('use_suquan', False,
-                            """Whether to perform a quantile normalization (only for linear model).""")
-tf.app.flags.DEFINE_boolean('optimize_f', False,
-                            """Whether to optimize the quantile function (only for linear model).""")
-tf.app.flags.DEFINE_float('Fwd', 0.1,
-                          """Weight decay of the quantile function.""")
-tf.app.flags.DEFINE_string('f_init', 'uniform',
-                           """Initial quantile function.""")
-tf.app.flags.DEFINE_float('moving_average_decay', 0.999,
-                          """The decay to use for the moving average.""")
-tf.app.flags.DEFINE_float('num_epochs_per_decay', 350.0,
-                          """Epochs after which learning rate decays.""")
-tf.app.flags.DEFINE_float('learning_rate_decay_factor', 0.1,
-                          """Learning rate decay factor.""")
-tf.app.flags.DEFINE_float('initial_learning_rate', 0.1,
-                          """Initial learning rate.""")
-
 # Global constants describing the CIFAR-10 data set.
 IMAGE_SIZE = cifar10_input.IMAGE_SIZE
 NUM_CLASSES = cifar10_input.NUM_CLASSES
 NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = cifar10_input.NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN
 NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = cifar10_input.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL
-
-
-# Constants describing the training process.
-#MOVING_AVERAGE_DECAY = 0.9999     # The decay to use for the moving average.
-#NUM_EPOCHS_PER_DECAY = 350.0      # Epochs after which learning rate decays.
-#LEARNING_RATE_DECAY_FACTOR = 0.1  # Learning rate decay factor.
-#INITIAL_LEARNING_RATE = 0.1       # Initial learning rate.
 
 # If a model is trained with multiple GPUs, prefix all Op names with tower_name
 # to differentiate the operations. Note that this prefix is removed from the
@@ -99,386 +60,416 @@ DATA_URL = 'https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz'
 
 
 def _activation_summary(x):
-  """Helper to create summaries for activations.
+    """Helper to create summaries for activations.
 
-  Creates a summary that provides a histogram of activations.
-  Creates a summary that measures the sparsity of activations.
+    Creates a summary that provides a histogram of activations.
+    Creates a summary that measures the sparsity of activations.
 
-  Args:
-    x: Tensor
-  Returns:
-    nothing
-  """
-  # Remove 'tower_[0-9]/' from the name in case this is a multi-GPU training
-  # session. This helps the clarity of presentation on tensorboard.
-  tensor_name = re.sub('%s_[0-9]*/' % TOWER_NAME, '', x.op.name)
-  tf.summary.histogram(tensor_name + '/activations', x)
-  tf.summary.scalar(tensor_name + '/sparsity',
-                                       tf.nn.zero_fraction(x))
-
-
-def _variable_on_cpu(name, shape, initializer):
-  """Helper to create a Variable stored on CPU memory.
-
-  Args:
-    name: name of the variable
-    shape: list of ints
-    initializer: initializer for Variable
-
-  Returns:
-    Variable Tensor
-  """
-  with tf.device('/cpu:0'):
-    dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
-    var = tf.get_variable(name, shape, initializer=initializer, dtype=dtype)
-  return var
+    Args:
+        x: Tensor
+    Returns:
+        nothing
+    """
+    # Remove 'tower_[0-9]/' from the name in case this is a multi-GPU training
+    # session. This helps the clarity of presentation on tensorboard.
+    tensor_name = re.sub('%s_[0-9]*/' % TOWER_NAME, '', x.op.name)
+    tf.summary.histogram(tensor_name + '/activations', x)
+    tf.summary.scalar(tensor_name + '/sparsity',
+                      tf.nn.zero_fraction(x))
 
 
-def _variable_with_weight_decay(name, shape, stddev, wd):
-  """Helper to create an initialized Variable with weight decay.
+def _variable_on_cpu(name, shape, initializer, args):
+    """Helper to create a Variable stored on CPU memory.
 
-  Note that the Variable is initialized with a truncated normal distribution.
-  A weight decay is added only if one is specified.
+    Args:
+        name: name of the variable
+        shape: list of ints
+        initializer: initializer for Variable
 
-  Args:
-    name: name of the variable
-    shape: list of ints
-    stddev: standard deviation of a truncated Gaussian
-    wd: add L2Loss weight decay multiplied by this float. If None, weight
-        decay is not added for this Variable.
-
-  Returns:
-    Variable Tensor
-  """
-  dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
-  var = _variable_on_cpu(
-      name,
-      shape,
-      tf.truncated_normal_initializer(stddev=stddev, dtype=dtype))
-  if wd is not None:
-    weight_decay = tf.multiply(tf.nn.l2_loss(var), wd, name='weight_loss')
-    tf.add_to_collection('losses', weight_decay)
-  return var
+    Returns:
+        Variable Tensor
+    """
+    with tf.device('/cpu:0'):
+        dtype = tf.float16 if args.use_fp16 else tf.float32
+        var = tf.get_variable(name, shape, initializer=initializer,
+                              dtype=dtype)
+    return var
 
 
-def distorted_inputs():
-  """Construct distorted input for CIFAR training using the Reader ops.
+def _variable_with_weight_decay(name, shape, stddev, wd, args):
+    """Helper to create an initialized Variable with weight decay.
 
-  Returns:
-    images: Images. 4D tensor of [batch_size, IMAGE_SIZE, IMAGE_SIZE, 3] size.
-    labels: Labels. 1D tensor of [batch_size] size.
+    Note that the Variable is initialized with a truncated normal distribution.
+    A weight decay is added only if one is specified.
 
-  Raises:
-    ValueError: If no data_dir
-  """
-  if not FLAGS.data_dir:
-    raise ValueError('Please supply a data_dir')
-  data_dir = os.path.join(FLAGS.data_dir, 'cifar-10-batches-bin')
-  images, labels = cifar10_input.distorted_inputs(data_dir=data_dir,
-                                                  batch_size=FLAGS.batch_size)
-  if FLAGS.use_fp16:
-    images = tf.cast(images, tf.float16)
-    labels = tf.cast(labels, tf.float16)
-  return images, labels
+    Args:
+        name: name of the variable
+        shape: list of ints
+        stddev: standard deviation of a truncated Gaussian
+        wd: add L2Loss weight decay multiplied by this float. If None, weight
+            decay is not added for this Variable.
 
-
-def inputs(eval_data):
-  """Construct input for CIFAR evaluation using the Reader ops.
-
-  Args:
-    eval_data: bool, indicating if one should use the train or eval data set.
-
-  Returns:
-    images: Images. 4D tensor of [batch_size, IMAGE_SIZE, IMAGE_SIZE, 3] size.
-    labels: Labels. 1D tensor of [batch_size] size.
-
-  Raises:
-    ValueError: If no data_dir
-  """
-  if not FLAGS.data_dir:
-    raise ValueError('Please supply a data_dir')
-  data_dir = os.path.join(FLAGS.data_dir, 'cifar-10-batches-bin')
-  images, labels = cifar10_input.inputs(eval_data=eval_data,
-                                        data_dir=data_dir,
-                                        batch_size=FLAGS.batch_size)
-  if FLAGS.use_fp16:
-    images = tf.cast(images, tf.float16)
-    labels = tf.cast(labels, tf.float16)
-  return images, labels
+    Returns:
+        Variable Tensor
+    """
+    dtype = tf.float16 if args.use_fp16 else tf.float32
+    var = _variable_on_cpu(
+        name,
+        shape,
+        tf.truncated_normal_initializer(stddev=stddev, dtype=dtype),
+        args)
+    if wd is not None:
+        weight_decay = tf.multiply(tf.nn.l2_loss(var), wd, name='weight_loss')
+        tf.add_to_collection('losses', weight_decay)
+    return var
 
 
-def inference(images):
-  """Build the CIFAR-10 model.
+def distorted_inputs(args):
+    """Construct distorted input for CIFAR training using the Reader ops.
 
-  Args:
-    images: Images returned from distorted_inputs() or inputs().
+    Returns:
+        images: Images. 4D tensor of [batch_size, IMAGE_SIZE, IMAGE_SIZE, 3]
+        size.
+        labels: Labels. 1D tensor of [batch_size] size.
 
-  Returns:
-    Logits.
-  """
-  # We instantiate all variables using tf.get_variable() instead of
-  # tf.Variable() in order to share variables across multiple GPU training runs.
-  # If we only ran this model on a single GPU, we could simplify this function
-  # by replacing all instances of tf.get_variable() with tf.Variable().
-  #
-  if FLAGS.use_linear_model:
-      # Use a single linear layer(WX + b),
-      # We don't apply softmax here because
-      # tf.nn.sparse_softmax_cross_entropy_with_logits accepts the unscaled logits
-      # and performs the softmax internally for efficiency.
-      with tf.variable_scope('softmax_linear') as scope:
-          # Flatten image to a vector
-          if FLAGS.use_greyscale:
-              reshape = tf.reshape(tf.image.rgb_to_grayscale(images), [FLAGS.batch_size, -1])
-          else:
-              reshape = tf.reshape(images, [FLAGS.batch_size, -1])
-          dim = reshape.get_shape()[1].value
-
-          weights = _variable_with_weight_decay('weights', shape=[dim, NUM_CLASSES],
-                                                stddev=1 / dim, wd=FLAGS.Wwd)
-          biases = _variable_on_cpu('biases', [NUM_CLASSES],
-                                    tf.constant_initializer(0.0))
-          if FLAGS.use_suquan:
-              if FLAGS.f_init == "normal":
-                  dist = tf.distributions.Normal(loc=0., scale=1.)
-                  finit = dist.quantile(tf.range(1/(dim+1),1,1/(dim+1)))
-              elif FLAGS.f_init == "uniform":
-                  finit = tf.range(-1.73, 1.73, 3.46 / dim, dtype=tf.float32)
-
-              f = tf.get_variable('f',
-                                  initializer=finit,
-                                  trainable = FLAGS.optimize_f)
-              if FLAGS.optimize_f:
-                  weight_decay_f = tf.multiply(tf.nn.l2_loss(f), FLAGS.Fwd, name='weight_loss_f')
-                  tf.add_to_collection('losses', weight_decay_f)
-
-              sorted_images = tf.nn.top_k(reshape, k=dim).indices
-              suq = tf.gather(f, sorted_images)
-              softmax_linear = tf.add(tf.matmul(suq, weights), biases, name=scope.name)
+    Raises:
+        ValueError: If no data_dir
+    """
+    if not args.data_dir:
+        raise ValueError('Please supply a data_dir')
+    data_dir = os.path.join(args.data_dir, 'cifar-10-batches-bin')
+    images, labels = cifar10_input.distorted_inputs(data_dir=data_dir,
+                                                    batch_size=args.batch_size)
+    if args.use_fp16:
+        images = tf.cast(images, tf.float16)
+        labels = tf.cast(labels, tf.float16)
+    return images, labels
 
 
-          else:
-              softmax_linear = tf.add(tf.matmul(reshape, weights), biases, name=scope.name)
-          _activation_summary(softmax_linear)
-  else:
-      # Define de full default conv net
-      # conv1
-      with tf.variable_scope('conv1') as scope:
+def inputs(eval_data, args):
+    """Construct input for CIFAR evaluation using the Reader ops.
 
-          if FLAGS.use_suquan:
-              reshape = tf.reshape(images, [FLAGS.batch_size, -1])
-              dim = reshape.get_shape()[1].value
-              if FLAGS.f_init == "normal":
-                  dist = tf.distributions.Normal(loc=0., scale=1.)
-                  finit = dist.quantile(tf.range(1/(dim+1),1,1/(dim+1)))
-              elif FLAGS.f_init == "uniform":
-                  finit = tf.range(-1.73, 1.73, 3.46 / dim, dtype=tf.float32)
-              f = tf.get_variable('f',
-                                  initializer=finit,
-                                  trainable = FLAGS.optimize_f)
-              if FLAGS.optimize_f:
-                  weight_decay_f = tf.multiply(tf.nn.l2_loss(f), FLAGS.Fwd, name='weight_loss_f')
-                  tf.add_to_collection('losses', weight_decay_f)
+    Args:
+        eval_data: bool, indicating if one should use the train or eval
+        data set.
 
-              sorted_images = tf.nn.top_k(reshape, k=dim).indices
-              suq = tf.gather(f, sorted_images)
-              suqimages = tf.reshape(suq, [FLAGS.batch_size, IMAGE_SIZE, IMAGE_SIZE, -1])
-          else:
-              suqimages = images
+    Returns:
+        images: Images. 4D tensor of [batch_size, IMAGE_SIZE, IMAGE_SIZE, 3]
+        size.
+        labels: Labels. 1D tensor of [batch_size] size.
 
-          kernel = _variable_with_weight_decay('weights',
-                                               shape=[5, 5, 3, 64],
-                                               stddev=5e-2,
-                                               wd=None)
-          conv = tf.nn.conv2d(suqimages, kernel, [1, 1, 1, 1], padding='SAME')
-          biases = _variable_on_cpu('biases', [64], tf.constant_initializer(0.0))
-          pre_activation = tf.nn.bias_add(conv, biases)
-          conv1 = tf.nn.relu(pre_activation, name=scope.name)
-          _activation_summary(conv1)
+    Raises:
+        ValueError: If no data_dir
+    """
+    if not args.data_dir:
+        raise ValueError('Please supply a data_dir')
+    data_dir = os.path.join(args.data_dir, 'cifar-10-batches-bin')
+    images, labels = cifar10_input.inputs(eval_data=eval_data,
+                                          data_dir=data_dir,
+                                          batch_size=args.batch_size)
+    if args.use_fp16:
+        images = tf.cast(images, tf.float16)
+        labels = tf.cast(labels, tf.float16)
+    return images, labels
 
-      # pool1
-      pool1 = tf.nn.max_pool(conv1, ksize=[1, 3, 3, 1], strides=[1, 2, 2, 1],
-                             padding='SAME', name='pool1')
-      # norm1
-      norm1 = tf.nn.lrn(pool1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
-                        name='norm1')
 
-      # conv2
-      with tf.variable_scope('conv2') as scope:
-          kernel = _variable_with_weight_decay('weights',
-                                               shape=[5, 5, 64, 64],
-                                               stddev=5e-2,
-                                               wd=None)
-          conv = tf.nn.conv2d(norm1, kernel, [1, 1, 1, 1], padding='SAME')
-          biases = _variable_on_cpu('biases', [64], tf.constant_initializer(0.1))
-          pre_activation = tf.nn.bias_add(conv, biases)
-          conv2 = tf.nn.relu(pre_activation, name=scope.name)
-          _activation_summary(conv2)
+def inference(images, args):
+    """Build the CIFAR-10 model.
 
-      # norm2
-      norm2 = tf.nn.lrn(conv2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
-                        name='norm2')
-      # pool2
-      pool2 = tf.nn.max_pool(norm2, ksize=[1, 3, 3, 1],
-                             strides=[1, 2, 2, 1], padding='SAME', name='pool2')
+    Args:
+        images: Images returned from distorted_inputs() or inputs().
 
-      # local3
-      with tf.variable_scope('local3') as scope:
-          # Move everything into depth so we can perform a single matrix multiply.
-          reshape = tf.reshape(pool2, [FLAGS.batch_size, -1])
-          dim = reshape.get_shape()[1].value
-          weights = _variable_with_weight_decay('weights', shape=[dim, 384],
-                                                stddev=0.04, wd=0.004)
-          biases = _variable_on_cpu('biases', [384], tf.constant_initializer(0.1))
-          local3 = tf.nn.relu(tf.matmul(reshape, weights) + biases, name=scope.name)
-          _activation_summary(local3)
+    Returns:
+        Logits.
+    """
+    # We instantiate all variables using tf.get_variable() instead of
+    # tf.Variable() in order to share variables across multiple GPU training
+    # runs.
+    # If we only ran this model on a single GPU, we could simplify this
+    # function by replacing all instances of tf.get_variable() with
+    # tf.Variable().
+    #
+    if args.use_linear_model:
+        # Use a single linear layer(WX + b),
+        # We don't apply softmax here because
+        # tf.nn.sparse_softmax_cross_entropy_with_logits accepts the
+        # unscaled logits and performs the softmax internally for efficiency.
+        with tf.variable_scope('softmax_linear') as scope:
+            # Flatten image to a vector
+            if args.use_greyscale:
+                reshape = tf.reshape(
+                    tf.image.rgb_to_grayscale(images), [args.batch_size, -1])
+            else:
+                reshape = tf.reshape(images, [args.batch_size, -1])
 
-      # local4
-      with tf.variable_scope('local4') as scope:
-          weights = _variable_with_weight_decay('weights', shape=[384, 192],
-                                                stddev=0.04, wd=0.004)
-          biases = _variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
-          local4 = tf.nn.relu(tf.matmul(local3, weights) + biases, name=scope.name)
-          _activation_summary(local4)
+            dim = reshape.get_shape()[1].value
 
-      # linear layer(WX + b),
-      # We don't apply softmax here because
-      # tf.nn.sparse_softmax_cross_entropy_with_logits accepts the unscaled logits
-      # and performs the softmax internally for efficiency.
-      with tf.variable_scope('softmax_linear') as scope:
-          weights = _variable_with_weight_decay('weights', [192, NUM_CLASSES],
-                                                stddev=1 / 192.0, wd=None)
-          biases = _variable_on_cpu('biases', [NUM_CLASSES],
-                                    tf.constant_initializer(0.0))
-          softmax_linear = tf.add(tf.matmul(local4, weights), biases, name=scope.name)
-          _activation_summary(softmax_linear)
+            weights = _variable_with_weight_decay(
+                'weights', shape=[dim, NUM_CLASSES],
+                stddev=1 / dim, wd=args.Wwd, args=args)
+            biases = _variable_on_cpu('biases', [NUM_CLASSES],
+                                      tf.constant_initializer(0.0), args)
+            if args.use_suquan:
+                if args.f_init == "normal":
+                    dist = tf.distributions.Normal(loc=0., scale=1.)
+                    finit = dist.quantile(tf.range(1/(dim+1), 1, 1/(dim+1)))
+                elif args.f_init == "uniform":
+                    finit = tf.range(-1.73, 1.73, 3.46/dim, dtype=tf.float32)
+                elif args.f_init == "constant":
+                    finit = tf.ones(dim)
 
-  return softmax_linear
+                f = tf.get_variable('f', initializer=finit,
+                                    trainable=args.optimize_f)
+                if args.optimize_f:
+                    weight_decay_f = tf.multiply(tf.nn.l2_loss(f), args.Fwd,
+                                                 name='weight_loss_f')
+                    tf.add_to_collection('losses', weight_decay_f)
+
+                sorted_images_tmp = tf.nn.top_k(-reshape, k=dim).indices
+                sorted_images = tf.nn.top_k(-sorted_images_tmp, k=dim).indices
+                # sorted_images = tf.nn.top_k(reshape, k=dim).indices
+                suq = tf.gather(f, sorted_images)
+                softmax_linear = tf.add(tf.matmul(suq, weights), biases,
+                                        name=scope.name)
+
+            else:
+                softmax_linear = tf.add(tf.matmul(reshape, weights), biases,
+                                        name=scope.name)
+
+            _activation_summary(softmax_linear)
+    else:
+        # Define de full default conv net
+        # conv1
+        with tf.variable_scope('conv1') as scope:
+
+            if args.use_suquan:
+                reshape = tf.reshape(images, [args.batch_size, -1])
+                dim = reshape.get_shape()[1].value
+                if args.f_init == "normal":
+                    dist = tf.distributions.Normal(loc=0., scale=1.)
+                    finit = dist.quantile(tf.range(1/(dim+1), 1, 1/(dim+1)))
+                elif args.f_init == "uniform":
+                    finit = tf.range(-1.73, 1.73, 3.46/dim, dtype=tf.float32)
+
+                f = tf.get_variable('f', initializer=finit,
+                                    trainable=args.optimize_f)
+                if args.optimize_f:
+                    weight_decay_f = tf.multiply(tf.nn.l2_loss(f), args.Fwd,
+                                                 name='weight_loss_f')
+                    tf.add_to_collection('losses', weight_decay_f)
+
+                sorted_images_tmp = tf.nn.top_k(-reshape, k=dim).indices
+                sorted_images = tf.nn.top_k(-sorted_images_tmp, k=dim).indices
+                # sorted_images = tf.nn.top_k(reshape, k=dim).indices
+                suq = tf.gather(f, sorted_images)
+                suqimages = tf.reshape(
+                    suq, [args.batch_size, IMAGE_SIZE, IMAGE_SIZE, -1])
+            else:
+                suqimages = images
+
+            kernel = _variable_with_weight_decay(
+                'weights', shape=[5, 5, 3, 64], stddev=5e-2, wd=None,
+                args=args)
+            conv = tf.nn.conv2d(
+                suqimages, kernel, [1, 1, 1, 1], padding='SAME')
+            biases = _variable_on_cpu(
+                'biases', [64], tf.constant_initializer(0.0), args)
+            pre_activation = tf.nn.bias_add(conv, biases)
+            conv1 = tf.nn.relu(pre_activation, name=scope.name)
+            _activation_summary(conv1)
+
+        # pool1
+        pool1 = tf.nn.max_pool(conv1, ksize=[1, 3, 3, 1], strides=[1, 2, 2, 1],
+                               padding='SAME', name='pool1')
+        # norm1
+        norm1 = tf.nn.lrn(pool1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
+                          name='norm1')
+
+        # conv2
+        with tf.variable_scope('conv2') as scope:
+            kernel = _variable_with_weight_decay(
+                'weights', shape=[5, 5, 64, 64], stddev=5e-2, wd=None, args=args)
+            conv = tf.nn.conv2d(norm1, kernel, [1, 1, 1, 1], padding='SAME')
+            biases = _variable_on_cpu(
+                'biases', [64], tf.constant_initializer(0.1), args)
+            pre_activation = tf.nn.bias_add(conv, biases)
+            conv2 = tf.nn.relu(pre_activation, name=scope.name)
+            _activation_summary(conv2)
+
+        # norm2
+        norm2 = tf.nn.lrn(conv2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
+                          name='norm2')
+        # pool2
+        pool2 = tf.nn.max_pool(norm2, ksize=[1, 3, 3, 1], strides=[1, 2, 2, 1],
+                               padding='SAME', name='pool2')
+
+        # local3
+        with tf.variable_scope('local3') as scope:
+            # Move everything into depth so we can perform a single matrix
+            # multiply.
+            reshape = tf.reshape(pool2, [args.batch_size, -1])
+            dim = reshape.get_shape()[1].value
+            weights = _variable_with_weight_decay(
+                'weights', shape=[dim, 384], stddev=0.04, wd=0.004, args=args)
+            biases = _variable_on_cpu(
+                'biases', [384], tf.constant_initializer(0.1), args)
+            local3 = tf.nn.relu(tf.matmul(reshape, weights) + biases,
+                                name=scope.name)
+            _activation_summary(local3)
+
+        # local4
+        with tf.variable_scope('local4') as scope:
+            weights = _variable_with_weight_decay(
+                'weights', shape=[384, 192], stddev=0.04, wd=0.004, args=args)
+            biases = _variable_on_cpu(
+                'biases', [192], tf.constant_initializer(0.1), args)
+            local4 = tf.nn.relu(tf.matmul(local3, weights) + biases,
+                                name=scope.name)
+            _activation_summary(local4)
+
+        # linear layer(WX + b),
+        # We don't apply softmax here because
+        # tf.nn.sparse_softmax_cross_entropy_with_logits accepts the unscaled
+        # logits and performs the softmax internally for efficiency.
+        with tf.variable_scope('softmax_linear') as scope:
+            weights = _variable_with_weight_decay(
+                'weights', [192, NUM_CLASSES], stddev=1 / 192.0, wd=None,
+                args=args)
+            biases = _variable_on_cpu(
+                'biases', [NUM_CLASSES], tf.constant_initializer(0.0), args)
+            softmax_linear = tf.add(tf.matmul(local4, weights), biases,
+                                    name=scope.name)
+            _activation_summary(softmax_linear)
+
+    return softmax_linear
 
 
 def loss(logits, labels):
-  """Add L2Loss to all the trainable variables.
+    """Add L2Loss to all the trainable variables.
 
-  Add summary for "Loss" and "Loss/avg".
-  Args:
-    logits: Logits from inference().
-    labels: Labels from distorted_inputs or inputs(). 1-D tensor
-            of shape [batch_size]
+    Add summary for "Loss" and "Loss/avg".
+    Args:
+        logits: Logits from inference().
+        labels: Labels from distorted_inputs or inputs(). 1-D tensor
+                        of shape [batch_size]
 
-  Returns:
-    Loss tensor of type float.
-  """
-  # Calculate the average cross entropy loss across the batch.
-  labels = tf.cast(labels, tf.int64)
-  cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-      labels=labels, logits=logits, name='cross_entropy_per_example')
-  cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
-  tf.add_to_collection('losses', cross_entropy_mean)
+    Returns:
+        Loss tensor of type float.
+    """
+    # Calculate the average cross entropy loss across the batch.
+    labels = tf.cast(labels, tf.int64)
+    cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        labels=labels, logits=logits, name='cross_entropy_per_example')
+    cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
+    tf.add_to_collection('losses', cross_entropy_mean)
 
-  # The total loss is defined as the cross entropy loss plus all of the weight
-  # decay terms (L2 loss).
-  return tf.add_n(tf.get_collection('losses'), name='total_loss')
+    # The total loss is defined as the cross entropy loss plus all of the
+    # weight decay terms (L2 loss).
+    return tf.add_n(tf.get_collection('losses'), name='total_loss')
 
 
 def _add_loss_summaries(total_loss):
-  """Add summaries for losses in CIFAR-10 model.
+    """Add summaries for losses in CIFAR-10 model.
 
-  Generates moving average for all losses and associated summaries for
-  visualizing the performance of the network.
+    Generates moving average for all losses and associated summaries for
+    visualizing the performance of the network.
 
-  Args:
-    total_loss: Total loss from loss().
-  Returns:
-    loss_averages_op: op for generating moving averages of losses.
-  """
-  # Compute the moving average of all individual losses and the total loss.
-  loss_averages = tf.train.ExponentialMovingAverage(0.9, name='avg')
-  losses = tf.get_collection('losses')
-  loss_averages_op = loss_averages.apply(losses + [total_loss])
+    Args:
+        total_loss: Total loss from loss().
+    Returns:
+        loss_averages_op: op for generating moving averages of losses.
+    """
+    # Compute the moving average of all individual losses and the total loss.
+    loss_averages = tf.train.ExponentialMovingAverage(0.9, name='avg')
+    losses = tf.get_collection('losses')
+    loss_averages_op = loss_averages.apply(losses + [total_loss])
 
-  # Attach a scalar summary to all individual losses and the total loss; do the
-  # same for the averaged version of the losses.
-  for l in losses + [total_loss]:
-    # Name each loss as '(raw)' and name the moving average version of the loss
-    # as the original loss name.
-    tf.summary.scalar(l.op.name + ' (raw)', l)
-    tf.summary.scalar(l.op.name, loss_averages.average(l))
+    # Attach a scalar summary to all individual losses and the total loss;
+    # do the same for the averaged version of the losses.
+    for l in losses + [total_loss]:
+        # Name each loss as '(raw)' and name the moving average version of the
+        # loss as the original loss name.
+        tf.summary.scalar(l.op.name + ' (raw)', l)
+        tf.summary.scalar(l.op.name, loss_averages.average(l))
 
-  return loss_averages_op
-
-
-def train(total_loss, global_step):
-  """Train CIFAR-10 model.
-
-  Create an optimizer and apply to all trainable variables. Add moving
-  average for all trainable variables.
-
-  Args:
-    total_loss: Total loss from loss().
-    global_step: Integer Variable counting the number of training steps
-      processed.
-  Returns:
-    train_op: op for training.
-  """
-  # Variables that affect learning rate.
-  num_batches_per_epoch = NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN / FLAGS.batch_size
-  decay_steps = int(num_batches_per_epoch * FLAGS.num_epochs_per_decay)
-
-  # Decay the learning rate exponentially based on the number of steps.
-  lr = tf.train.exponential_decay(FLAGS.initial_learning_rate,
-                                  global_step,
-                                  decay_steps,
-                                  FLAGS.learning_rate_decay_factor,
-                                  staircase=True)
-  tf.summary.scalar('learning_rate', lr)
-
-  # Generate moving averages of all losses and associated summaries.
-  loss_averages_op = _add_loss_summaries(total_loss)
-
-  # Compute gradients.
-  with tf.control_dependencies([loss_averages_op]):
-    opt = tf.train.GradientDescentOptimizer(lr)
-    grads = opt.compute_gradients(total_loss)
-
-  # Apply gradients.
-  apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
-
-  # Add histograms for trainable variables.
-  for var in tf.trainable_variables():
-    tf.summary.histogram(var.op.name, var)
-
-  # Add histograms for gradients.
-  for grad, var in grads:
-    if grad is not None:
-      tf.summary.histogram(var.op.name + '/gradients', grad)
-
-  # Track the moving averages of all trainable variables.
-  variable_averages = tf.train.ExponentialMovingAverage(
-      FLAGS.moving_average_decay, global_step)
-  variables_averages_op = variable_averages.apply(tf.trainable_variables())
-
-  with tf.control_dependencies([apply_gradient_op, variables_averages_op]):
-    train_op = tf.no_op(name='train')
-
-  return train_op
+    return loss_averages_op
 
 
-def maybe_download_and_extract():
-  """Download and extract the tarball from Alex's website."""
-  dest_directory = FLAGS.data_dir
-  if not os.path.exists(dest_directory):
-    os.makedirs(dest_directory)
-  filename = DATA_URL.split('/')[-1]
-  filepath = os.path.join(dest_directory, filename)
-  if not os.path.exists(filepath):
-    def _progress(count, block_size, total_size):
-      sys.stdout.write('\r>> Downloading %s %.1f%%' % (filename,
-          float(count * block_size) / float(total_size) * 100.0))
-      sys.stdout.flush()
-    filepath, _ = urllib.request.urlretrieve(DATA_URL, filepath, _progress)
-    print()
-    statinfo = os.stat(filepath)
-    print('Successfully downloaded', filename, statinfo.st_size, 'bytes.')
-  extracted_dir_path = os.path.join(dest_directory, 'cifar-10-batches-bin')
-  if not os.path.exists(extracted_dir_path):
-    tarfile.open(filepath, 'r:gz').extractall(dest_directory)
+def train(total_loss, global_step, args):
+    """Train CIFAR-10 model.
+
+    Create an optimizer and apply to all trainable variables. Add moving
+    average for all trainable variables.
+
+    Args:
+        total_loss: Total loss from loss().
+        global_step: Integer Variable counting the number of training steps
+            processed.
+    Returns:
+        train_op: op for training.
+    """
+    # Variables that affect learning rate.
+    num_batches_per_epoch = NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN / args.batch_size
+    decay_steps = int(num_batches_per_epoch * args.num_epochs_per_decay)
+
+    # Decay the learning rate exponentially based on the number of steps.
+    lr = tf.train.exponential_decay(args.initial_learning_rate,
+                                    global_step,
+                                    decay_steps,
+                                    args.learning_rate_decay_factor,
+                                    staircase=True)
+    tf.summary.scalar('learning_rate', lr)
+
+    # Generate moving averages of all losses and associated summaries.
+    loss_averages_op = _add_loss_summaries(total_loss)
+
+    # Compute gradients.
+    with tf.control_dependencies([loss_averages_op]):
+        opt = tf.train.GradientDescentOptimizer(lr)
+        grads = opt.compute_gradients(total_loss)
+
+    # Apply gradients.
+    apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
+
+    # Add histograms for trainable variables.
+    for var in tf.trainable_variables():
+        tf.summary.histogram(var.op.name, var)
+        # tf.summary.tensor_summary(var.op.name, var)
+        if var.op.name == "softmax_linear/f":
+            tf.summary.text(var.op.name, tf.as_string(var))
+
+    # Add histograms for gradients.
+    for grad, var in grads:
+        if grad is not None:
+            tf.summary.histogram(var.op.name + '/gradients', grad)
+
+    # Track the moving averages of all trainable variables.
+    variable_averages = tf.train.ExponentialMovingAverage(
+        args.moving_average_decay, global_step)
+    variables_averages_op = variable_averages.apply(tf.trainable_variables())
+
+    with tf.control_dependencies([apply_gradient_op, variables_averages_op]):
+        train_op = tf.no_op(name='train')
+
+    return train_op
+
+
+def maybe_download_and_extract(args):
+    """Download and extract the tarball from Alex's website."""
+    dest_directory = args.data_dir
+    if not os.path.exists(dest_directory):
+        os.makedirs(dest_directory)
+    filename = DATA_URL.split('/')[-1]
+    filepath = os.path.join(dest_directory, filename)
+    if not os.path.exists(filepath):
+        def _progress(count, block_size, total_size):
+            sys.stdout.write('\r>> Downloading %s %.1f%%' % (filename,
+                    float(count * block_size) / float(total_size) * 100.0))
+            sys.stdout.flush()
+        filepath, _ = urllib.request.urlretrieve(DATA_URL, filepath, _progress)
+        print()
+        statinfo = os.stat(filepath)
+        print('Successfully downloaded', filename, statinfo.st_size, 'bytes.')
+    extracted_dir_path = os.path.join(dest_directory, 'cifar-10-batches-bin')
+    if not os.path.exists(extracted_dir_path):
+        tarfile.open(filepath, 'r:gz').extractall(dest_directory)

@@ -42,26 +42,82 @@ import time
 import tensorflow as tf
 
 import cifar10
+import argparse
 
-FLAGS = tf.app.flags.FLAGS
-
-tf.app.flags.DEFINE_string('train_dir', '/tmp/cifar10_train',
-                           """Directory where to write event logs """
-                           """and checkpoint.""")
-tf.app.flags.DEFINE_integer('max_steps', 1000000,
-                            """Number of batches to run.""")
-tf.app.flags.DEFINE_boolean('log_device_placement', False,
-                            """Whether to log device placement.""")
-tf.app.flags.DEFINE_boolean('use_distorted_inputs', True,
-                            """Whether to use distorted images to train the model.""")
-tf.app.flags.DEFINE_integer('log_frequency', 10,
-                            """How often to log results to the console.""")
-tf.app.flags.DEFINE_integer('save_checkpoint_secs', 30,
-                            """How often to save the model.""")
+parser = argparse.ArgumentParser()
 
 
+def str2bool(string):
+  if string == 'False':
+    return False
+  elif string == 'True':
+    return True
 
-def train():
+
+parser.add_argument("--train_dir", type=str,
+                    help="Directory where to write event logs and checkpoint.",
+                    default="/tmp/cifar10_train")
+parser.add_argument("--max_steps", type=int,
+                    help="Number of batches to run.", default=1000000)
+parser.add_argument("--log_device_placement", type=str2bool,
+                    help="Whether to log device placement.",
+                    default=False, choices=[True, False])
+parser.add_argument("--use_distorted_inputs", type=str2bool,
+                    help="Whether to use distorted images to train the model.",
+                    default=True, choices=[True, False])
+parser.add_argument("--log_frequency", type=int,
+                    help="How often to log results to the console.",
+                    default=10)
+parser.add_argument("--save_checkpoint_secs", type=int,
+                    help="How often to save the model.", default=30)
+
+# Basic model parameters (used in cifar10.py).
+parser.add_argument("--batch_size", type=int,
+                    help="Number of images to process in a batch.",
+                    default=128)
+parser.add_argument("--data_dir", type=str,
+                    help="Path to the CIFAR-10 data directory.",
+                    default='/tmp/cifar10_data')
+parser.add_argument("--use_fp16", type=str2bool,
+                    help="Train the model using fp16.",
+                    default=False, choices=[True, False])
+parser.add_argument("--use_linear_model", type=str2bool,
+                    help="Whether to use a simple linear model.",
+                    default=False, choices=[True, False])
+parser.add_argument("--use_greyscale", type=str2bool,
+                    help="Whether to transform the images to greyscale (only for linear model).",
+                    default=False, choices=[True, False])
+parser.add_argument("--Wwd", type=float,
+                    help="Weight decay of the linear model.",
+                    default=0.1)
+parser.add_argument("--use_suquan", type=str2bool,
+                    help="Whether to perform a quantile normalization (only for linear model).",
+                    default=False, choices=[True, False])
+parser.add_argument("--optimize_f", type=str2bool,
+                    help="Whether to optimize the quantile function (only for linear model).",
+                    default=False, choices=[True, False])
+parser.add_argument("--Fwd", type=float,
+                    help="Weight decay of the quantile function.", default=0.1)
+parser.add_argument("--f_init", type=str,
+                    help="Initial quantile function.", default='constant',
+                    choices=["normal", "uniform", "constant"])
+parser.add_argument("--moving_average_decay", type=float,
+                    help="The decay to use for the moving average.",
+                    default=0.999)
+parser.add_argument("--num_epochs_per_decay", type=float,
+                    help="Epochs after which learning rate decays.",
+                    default=350.0)
+parser.add_argument("--learning_rate_decay_factor", type=float,
+                    help="Learning rate decay factor.",
+                    default=0.1)
+parser.add_argument("--initial_learning_rate", type=float,
+                    help="Initial learning rate.",
+                    default=0.1)
+
+args = parser.parse_args()
+
+
+def train(args):
   """Train CIFAR-10 for a number of steps."""
   with tf.Graph().as_default():
     global_step = tf.train.get_or_create_global_step()
@@ -70,22 +126,22 @@ def train():
     # Force input pipeline to CPU:0 to avoid operations sometimes ending up on
     # GPU and resulting in a slow down.
     with tf.device('/cpu:0'):
-        if FLAGS.use_distorted_inputs:
-            images, labels = cifar10.distorted_inputs()
+        if args.use_distorted_inputs:
+            images, labels = cifar10.distorted_inputs(args)
         else:
-            images, labels = cifar10.inputs(False)
+            images, labels = cifar10.inputs(False, args)
 
 
     # Build a Graph that computes the logits predictions from the
     # inference model.
-    logits = cifar10.inference(images)
+    logits = cifar10.inference(images, args)
 
     # Calculate loss.
     loss = cifar10.loss(logits, labels)
 
     # Build a Graph that trains the model with one batch of examples and
     # updates the model parameters.
-    train_op = cifar10.train(loss, global_step)
+    train_op = cifar10.train(loss, global_step, args)
 
     class _LoggerHook(tf.train.SessionRunHook):
       """Logs loss and runtime."""
@@ -99,14 +155,14 @@ def train():
         return tf.train.SessionRunArgs(loss)  # Asks for loss value.
 
       def after_run(self, run_context, run_values):
-        if self._step % FLAGS.log_frequency == 0:
+        if self._step % args.log_frequency == 0:
           current_time = time.time()
           duration = current_time - self._start_time
           self._start_time = current_time
 
           loss_value = run_values.results
-          examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
-          sec_per_batch = float(duration / FLAGS.log_frequency)
+          examples_per_sec = args.log_frequency * args.batch_size / duration
+          sec_per_batch = float(duration / args.log_frequency)
 
           format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f '
                         'sec/batch)')
@@ -114,23 +170,23 @@ def train():
                                examples_per_sec, sec_per_batch))
 
     with tf.train.MonitoredTrainingSession(
-        checkpoint_dir=FLAGS.train_dir,
-        hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
+        checkpoint_dir=args.train_dir,
+        hooks=[tf.train.StopAtStepHook(last_step=args.max_steps),
                tf.train.NanTensorHook(loss),
                _LoggerHook()],
         config=tf.ConfigProto(
-            log_device_placement=FLAGS.log_device_placement),
-        save_checkpoint_secs=FLAGS.save_checkpoint_secs) as mon_sess:
+            log_device_placement=args.log_device_placement),
+        save_checkpoint_secs=args.save_checkpoint_secs) as mon_sess:
       while not mon_sess.should_stop():
         mon_sess.run(train_op)
 
 
 def main(argv=None):  # pylint: disable=unused-argument
-  cifar10.maybe_download_and_extract()
-  if tf.gfile.Exists(FLAGS.train_dir):
-    tf.gfile.DeleteRecursively(FLAGS.train_dir)
-  tf.gfile.MakeDirs(FLAGS.train_dir)
-  train()
+  cifar10.maybe_download_and_extract(args)
+  if tf.gfile.Exists(args.train_dir):
+    tf.gfile.DeleteRecursively(args.train_dir)
+  tf.gfile.MakeDirs(args.train_dir)
+  train(args)
 
 
 if __name__ == '__main__':
