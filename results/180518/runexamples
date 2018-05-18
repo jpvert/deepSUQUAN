@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# This script trains linear models on CIFAR-10 data, with or without SUQUAN normalization, for different regularization parameteres, and prints the test performance to a file.
+
+# Parameters (commented parameters are left to their default value)
+SRCPATH=../../src/ # Where source files are
+
+# Parameters used in cifar10_train.py
+# train_dir
+MAXSTEP=10000
+# log_device_placement
+USEDISTORTEDINPUT=False
+# log_frequency
+SAVECHECKPOINTSECS=2
+
+# Parameters used in cifar10.py
+BATCHSIZE=1000
+# data_dir
+# use_fp16
+USELINEARMODEL=True
+USEGREYSCALE="True False"
+WWD="0.0 0.0001 0.001 0.01 0.1 1.0"
+USESUQUAN=True
+OPTIMIZEF=True
+FWD="0.0 0.0001 0.001 0.01 0.1 1.0"
+FINIT="constant"
+# moving_average_decay
+NUMEPOCHSPERDECAY=10
+LEARNINGRATEDEACYFACTOR=0.95
+# initial_learning_rate
+
+# Parameters used in cifar10_eval.py
+# eval_dir
+# eval_data
+# checkpoint_dir
+EVALINTERVALSECS=1
+# num_examples
+RUNONCE=False
+
+g=True
+w=0.1
+v=0.01
+
+python3 ${SRCPATH}cifar10_train.py --use_linear_model ${USELINEARMODEL} --batch_size ${BATCHSIZE} --max_steps ${MAXSTEP} --num_epochs_per_decay ${NUMEPOCHSPERDECAY} --save_checkpoint_secs ${SAVECHECKPOINTSECS} --use_greyscale ${g} --use_distorted_inputs ${USEDISTORTEDINPUT} --Wwd ${w} --use_suquan ${USESUQUAN} --optimize_f ${OPTIMIZEF} --Fwd ${v} --f_init ${FINIT} --learning_rate_decay_factor ${LEARNINGRATEDEACYFACTOR}
+python3 ${SRCPATH}cifar10_eval.py --use_linear_model ${USELINEARMODEL} --use_greyscale ${g} --use_suquan ${USESUQUAN} --optimize_f ${OPTIMIZEF} --run_once ${RUNONCE} --f_init ${FINIT} --learning_rate_decay_factor ${LEARNINGRATEDEACYFACTOR} --eval_interval_secs ${EVALINTERVALSECS}
+
+
+
+g=False
+w=0.0001
+v=0.01
+
+python3 ${SRCPATH}cifar10_train.py --use_linear_model ${USELINEARMODEL} --batch_size ${BATCHSIZE} --max_steps ${MAXSTEP} --num_epochs_per_decay ${NUMEPOCHSPERDECAY} --save_checkpoint_secs ${SAVECHECKPOINTSECS} --use_greyscale ${g} --use_distorted_inputs ${USEDISTORTEDINPUT} --Wwd ${w} --use_suquan ${USESUQUAN} --optimize_f ${OPTIMIZEF} --Fwd ${v} --f_init ${FINIT} --learning_rate_decay_factor ${LEARNINGRATEDEACYFACTOR}
+python3 ${SRCPATH}cifar10_eval.py --use_linear_model ${USELINEARMODEL} --use_greyscale ${g} --use_suquan ${USESUQUAN} --optimize_f ${OPTIMIZEF} --run_once ${RUNONCE} --f_init ${FINIT} --learning_rate_decay_factor ${LEARNINGRATEDEACYFACTOR} --eval_interval_secs ${EVALINTERVALSECS}
+
